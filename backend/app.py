@@ -136,7 +136,7 @@ def parse_video_title(title):
     }
 
 
-def generate_facts_with_grok(artist, song, title, video_id):
+def generate_facts_with_grok(artist, song, title, video_id, duration=None):
     """
     Call Grok API using xAI SDK with Pydantic validation.
     """
@@ -148,10 +148,19 @@ def generate_facts_with_grok(artist, song, title, video_id):
             {"time": 60, "text": "Set your GROK_API_KEY environment variable to generate real facts."}
         ]
     
-    prompt = f"""Generate 15-20 interesting Pop Up Video style facts for this music video:
+    # Calculate fact timing based on video duration
+    if duration and duration > 0:
+        end_time = int(duration) - 10  # Stop 10 seconds before end
+        num_facts = max(15, min(25, int(duration / 15)))  # 1 fact every ~15 seconds
+        timing_instruction = f"Distribute timing evenly from 10 seconds to {end_time} seconds (approximately one fact every 10-15 seconds). Generate approximately {num_facts} facts."
+    else:
+        timing_instruction = "Distribute timing evenly from 10 seconds to 280 seconds. Generate 15-20 facts."
+    
+    prompt = f"""Generate interesting Pop Up Video style facts for this music video:
 
 "{title}" by {artist}
 YouTube Video ID: {video_id}
+Video Duration: {int(duration) if duration else 'unknown'} seconds
 
 Generate fun, surprising trivia facts about:
 - The song's creation and recording
@@ -167,7 +176,7 @@ Facts should be:
 - Factually accurate (do not make up information)
 - In the style of VH1's Pop Up Video
 
-Distribute timing evenly from 10 seconds to 280 seconds.
+{timing_instruction}
 
 Return ONLY valid JSON matching this structure:
 {{
@@ -232,6 +241,7 @@ def generate_facts():
         data = request.get_json()
         video_id = data.get('video_id', '')
         title = data.get('title', '')
+        duration = data.get('duration', None)  # Optional duration in seconds
         
         if not video_id or not title:
             return jsonify({'error': 'Missing video_id or title'}), 400
@@ -273,8 +283,9 @@ def generate_facts():
             }), 200
         
         # Generate facts using Grok
-        print(f"Generating facts for: {parsed['artist']} - {parsed['song']} (ID: {video_id})")
-        facts = generate_facts_with_grok(parsed['artist'], parsed['song'], parsed['full_title'], video_id)
+        duration_info = f" ({int(duration)}s)" if duration else ""
+        print(f"Generating facts for: {parsed['artist']} - {parsed['song']} (ID: {video_id}){duration_info}")
+        facts = generate_facts_with_grok(parsed['artist'], parsed['song'], parsed['full_title'], video_id, duration)
         
         # Create facts object
         facts_data = {

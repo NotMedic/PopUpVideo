@@ -128,6 +128,12 @@
         console.log('[PopUpFacts] Video ID:', currentVideoId);
         console.log('[PopUpFacts] Video title:', videoTitle);
         
+        // Get video duration if available
+        const videoDuration = videoElement ? Math.floor(videoElement.duration) : null;
+        if (videoDuration) {
+            console.log('[PopUpFacts] Video duration:', videoDuration, 'seconds');
+        }
+        
         GM_xmlhttpRequest({
             method: 'POST',
             url: LOCAL_API_URL,
@@ -136,7 +142,8 @@
             },
             data: JSON.stringify({
                 video_id: currentVideoId,
-                title: videoTitle
+                title: videoTitle,
+                duration: videoDuration
             }),
             onload: function(response) {
                 if (response.status === 200) {
