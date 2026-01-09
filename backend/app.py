@@ -15,7 +15,7 @@ CORS(app)  # Enable CORS for all routes
 # Configuration
 FACTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'facts')
 GROK_API_KEY = os.environ.get('GROK_API_KEY', '') or os.environ.get('XAI_API_KEY', '')
-GROK_MODEL = os.environ.get('GROK_MODEL', 'grok-4-1-fast-reasoning')
+GROK_MODEL = os.environ.get('GROK_MODEL', 'grok-4-1-fast-non-reasoning')
 
 # Ensure facts directory exists
 os.makedirs(FACTS_DIR, exist_ok=True)
@@ -148,19 +148,26 @@ def generate_facts_with_grok(artist, song, title, video_id):
             {"time": 60, "text": "Set your GROK_API_KEY environment variable to generate real facts."}
         ]
     
-    prompt = f"""Generate 15-20 interesting, surprising Pop Up Video style facts for: "{title}" by {artist}.
+    prompt = f"""Generate 15-20 interesting Pop Up Video style facts for this music video:
 
+"{title}" by {artist}
 YouTube Video ID: {video_id}
-(You may have this video indexed - use any knowledge about this specific video to enhance accuracy)
+
+Generate fun, surprising trivia facts about:
+- The song's creation and recording
+- The artist/band members
+- The music video production
+- The song's chart performance and cultural impact
+- The era when this was released
+- Any interesting backstory or context
 
 Facts should be:
-- Short (1-2 sentences max)
+- Short (1-2 sentences max, under 200 characters)
 - Entertaining and surprising
-- In the style of VH1's Pop Up Video (quirky, fun, unexpected trivia)
-- Factually accurate about the song, music video, artist, or the era
-- Relevant to the scene at the time they're popped up in the music video
+- Factually accurate (do not make up information)
+- In the style of VH1's Pop Up Video
 
-Distribute timing evenly from 10 seconds to 280 seconds throughout a typical 3-5 minute music video.
+Distribute timing evenly from 10 seconds to 280 seconds.
 
 Return ONLY valid JSON matching this structure:
 {{
