@@ -1,0 +1,2 @@
+# This directory stores cached facts as JSON files
+# Each file is named {VIDEO_ID}.json
