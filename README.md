@@ -5,7 +5,7 @@ A TamperMonkey script that brings the classic VH1 "Pop Up Video" experience to a
 ## Features
 
 - 🎵 **Works on any YouTube video** - automatically extracts song/artist info
-- 🤖 **AI-Generated Facts** - uses Grok-2 to create entertaining trivia
+- 🤖 **AI-Generated Facts** - uses Grok-4.1 to create entertaining trivia
 - 📦 **GitHub Caching** - facts are shared across all users once generated
 - 🎨 **Classic Pop Up Video Style** - yellow bubbles, random positioning
 - ⚡ **Fast Loading** - cached facts load instantly
