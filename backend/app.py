@@ -4,18 +4,96 @@ import os
 import json
 from datetime import datetime
 import re
-import requests
+from xai_sdk import Client
+from xai_sdk.chat import system, user
+from pydantic import BaseModel, Field
+from typing import List
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
 # Configuration
 FACTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'facts')
-GROK_API_KEY = os.environ.get('GROK_API_KEY', '')  # Set via environment variable
-GROK_API_URL = 'https://api.x.ai/v1/chat/completions'
+GROK_API_KEY = os.environ.get('GROK_API_KEY', '') or os.environ.get('XAI_API_KEY', '')
+GROK_MODEL = os.environ.get('GROK_MODEL', 'grok-4-1-fast-reasoning')
 
 # Ensure facts directory exists
 os.makedirs(FACTS_DIR, exist_ok=True)
+
+# Pydantic models for structured output
+class Fact(BaseModel):
+    """A single Pop Up Video fact with timing"""
+    time: int = Field(ge=0, le=600, description="Time in seconds when the fact should appear (0-600)")
+    text: str = Field(min_length=10, max_length=250, description="The fact text (10-250 characters)")
+
+class FactsList(BaseModel):
+    """Collection of Pop Up Video facts"""
+    facts: List[Fact] = Field(min_length=15, max_length=25, description="List of 15-25 facts")
+
+
+# Initialize xAI SDK client
+xai_client = None
+try:
+    if GROK_API_KEY:
+        xai_client = Client(api_key=GROK_API_KEY)
+        print("✅ xAI SDK client initialized")
+    else:
+        print("⚠️ No GROK_API_KEY or XAI_API_KEY found - using fallback mode")
+except Exception as e:
+    print(f"⚠️ Failed to initialize xAI client: {e}")
+
+
+def is_likely_music_video(title):
+    """
+    Check if the video title looks like a music video.
+    Returns (is_music_video, reason)
+    """
+    # Music video indicators
+    music_indicators = [
+        r'\(Official\s*(Video|Music\s*Video|Audio|MV)\)',
+        r'\[Official\s*(Video|Music\s*Video|Audio|MV)\]',
+        r'\(Lyric\s*Video\)',
+        r'\[Lyric\s*Video\]',
+        r' - (Official|Lyric|Music)\s*(Video|Audio)',
+        r'(Official|Lyric)\s*Video',
+        r'\bMV\b',
+        r'\bOfficial\s*Audio\b'
+    ]
+    
+    # Non-music video indicators (skip these)
+    non_music_indicators = [
+        r'\b(Tutorial|How\s*to|Guide|Review|Unboxing|Vlog|Interview|Podcast|Gameplay|Walkthrough)\b',
+        r'\b(Trailer|Teaser|Behind\s*the\s*Scenes|BTS|Making\s*of)\b',
+        r'\b(Ep\s*\d+|Episode\s*\d+|Season\s*\d+|S\d+E\d+)\b',  # TV shows
+        r'\b(Part\s*\d+|#\d+)\b',  # Multi-part videos
+        r'\b(Live\s*Stream|Streaming)\b',
+        r'\b(News|Documentary|Lecture|Sermon)\b'
+    ]
+    
+    # Check for non-music indicators first (highest priority)
+    for pattern in non_music_indicators:
+        if re.search(pattern, title, re.IGNORECASE):
+            return False, f"Contains non-music keyword: {pattern}"
+    
+    # Check for strong music indicators
+    for pattern in music_indicators:
+        if re.search(pattern, title, re.IGNORECASE):
+            return True, "Contains music video keywords"
+    
+    # Check for artist - song format (common for music videos)
+    if ' - ' in title:
+        parts = title.split(' - ')
+        # If we have 2 parts and they're reasonable lengths, likely music
+        if len(parts) == 2 and 2 <= len(parts[0]) <= 50 and 2 <= len(parts[1]) <= 100:
+            return True, "Has artist - song format"
+    
+    # Check for common music-related words
+    music_words = r'\b(feat\.|ft\.|featuring|remix|cover|acoustic|live|performance)\b'
+    if re.search(music_words, title, re.IGNORECASE):
+        return True, "Contains music-related terms"
+    
+    # Default: assume it might be music (be permissive)
+    return True, "No clear non-music indicators"
 
 
 def parse_video_title(title):
@@ -37,29 +115,32 @@ def parse_video_title(title):
         return {
             'artist': parts[0].strip(),
             'song': parts[1].strip(),
-            'full_title': clean_title
+            'full_title': clean_title,
+            'is_music': True
         }
     elif '|' in clean_title:
         parts = clean_title.split('|', 1)
         return {
             'artist': parts[0].strip(),
             'song': parts[1].strip(),
-            'full_title': clean_title
+            'full_title': clean_title,
+            'is_music': True
         }
     
-    # Fallback - couldn't parse, return as-is
+    # Fallback - couldn't parse artist/song clearly
     return {
         'artist': 'Unknown',
         'song': clean_title,
-        'full_title': clean_title
+        'full_title': clean_title,
+        'is_music': False  # Unclear format
     }
 
 
-def generate_facts_with_grok(artist, song, title):
+def generate_facts_with_grok(artist, song, title, video_id):
     """
-    Call Grok API to generate Pop Up Video style facts.
+    Call Grok API using xAI SDK with Pydantic validation.
     """
-    if not GROK_API_KEY:
+    if not xai_client:
         # Fallback for testing without API key
         return [
             {"time": 10, "text": f"This is {artist} - {song}!"},
@@ -67,70 +148,60 @@ def generate_facts_with_grok(artist, song, title):
             {"time": 60, "text": "Set your GROK_API_KEY environment variable to generate real facts."}
         ]
     
-    prompt = f"""You are generating fun facts for a "Pop Up Video" style experience for the music video: "{title}" by {artist}.
+    prompt = f"""Generate 15-20 interesting, surprising Pop Up Video style facts for: "{title}" by {artist}.
 
-Generate exactly 15-20 interesting, surprising, or entertaining facts about this song, music video, artist, or the era it was made in. Facts should be:
+YouTube Video ID: {video_id}
+(You may have this video indexed - use any knowledge about this specific video to enhance accuracy)
+
+Facts should be:
 - Short (1-2 sentences max)
 - Entertaining and surprising
 - In the style of VH1's Pop Up Video (quirky, fun, unexpected trivia)
-- Factually accurate
-- Timed throughout the video (assume a 3-5 minute video)
+- Factually accurate about the song, music video, artist, or the era
+- Relevant to the scene at the time they're popped up in the music video
 
-Format your response as a JSON array ONLY (no other text) with this structure:
-[
-  {{"time": 10, "text": "First fact here"}},
-  {{"time": 25, "text": "Second fact here"}},
-  ...
-]
+Distribute timing evenly from 10 seconds to 280 seconds throughout a typical 3-5 minute music video.
 
-Distribute the timing evenly from 10 seconds to 280 seconds. Make the facts engaging!"""
+Return ONLY valid JSON matching this structure:
+{{
+  "facts": [
+    {{"time": 10, "text": "First fact..."}},
+    {{"time": 25, "text": "Second fact..."}},
+    ...
+  ]
+}}"""
 
     try:
-        response = requests.post(
-            GROK_API_URL,
-            headers={
-                'Authorization': f'Bearer {GROK_API_KEY}',
-                'Content-Type': 'application/json'
-            },
-            json={
-                'model': 'grok-2-1212',
-                'messages': [
-                    {'role': 'system', 'content': 'You are a Pop Up Video fact generator. Always respond with valid JSON only.'},
-                    {'role': 'user', 'content': prompt}
-                ],
-                'temperature': 0.8,
-                'max_tokens': 2000
-            },
-            timeout=30
-        )
+        print(f"🌐 Generating facts using xAI SDK...")
         
-        response.raise_for_status()
-        result = response.json()
+        # Use xAI SDK to generate facts
+        chat = xai_client.chat.create(model=GROK_MODEL)
+        chat.append(system("You are a Pop Up Video fact generator. Always respond with valid JSON matching the exact structure requested."))
+        chat.append(user(prompt))
         
-        # Extract the generated facts
-        content = result['choices'][0]['message']['content']
+        # Get the response
+        response = chat.sample()
+        content = response.content
         
-        # Try to parse JSON from the response
-        # Sometimes LLMs wrap JSON in markdown code blocks
+        print(f"✅ Received response from Grok ({len(content)} chars)")
+        
+        # Clean up markdown code blocks if present
         if '```json' in content:
             content = content.split('```json')[1].split('```')[0].strip()
         elif '```' in content:
             content = content.split('```')[1].split('```')[0].strip()
         
-        facts = json.loads(content)
+        # Parse and validate with Pydantic
+        facts_list = FactsList.model_validate_json(content)
         
-        # Validate structure
-        if not isinstance(facts, list):
-            raise ValueError("Facts must be a list")
+        print(f"✅ Generated {len(facts_list.facts)} facts successfully")
         
-        for fact in facts:
-            if not isinstance(fact, dict) or 'time' not in fact or 'text' not in fact:
-                raise ValueError("Invalid fact structure")
-        
+        # Convert Pydantic objects to dicts
+        facts = [{"time": fact.time, "text": fact.text} for fact in facts_list.facts]
         return facts
         
     except Exception as e:
-        print(f"Error calling Grok API: {e}")
+        print(f"❌ Error calling Grok API: {e}")
         # Fallback facts
         return [
             {"time": 10, "text": f"Error generating facts: {str(e)}"},
@@ -168,12 +239,35 @@ def generate_facts():
                 'data': existing_facts
             })
         
+        # Check if this looks like a music video
+        is_music, reason = is_likely_music_video(title)
+        print(f"🎵 Music video check: {is_music} - {reason}")
+        
+        if not is_music:
+            print(f"⏭️  Skipping non-music video: {title}")
+            return jsonify({
+                'source': 'skipped',
+                'reason': 'Not detected as a music video',
+                'detail': reason,
+                'data': None
+            }), 200  # Return 200 so TamperMonkey doesn't show error
+        
         # Parse video title
         parsed = parse_video_title(title)
         
+        # Double-check parsing quality
+        if not parsed['is_music'] and parsed['artist'] == 'Unknown':
+            print(f"⚠️  Unclear music video format: {title}")
+            return jsonify({
+                'source': 'skipped',
+                'reason': 'Unable to parse artist/song from title',
+                'detail': 'Title format unclear',
+                'data': None
+            }), 200
+        
         # Generate facts using Grok
-        print(f"Generating facts for: {parsed['artist']} - {parsed['song']}")
-        facts = generate_facts_with_grok(parsed['artist'], parsed['song'], parsed['full_title'])
+        print(f"Generating facts for: {parsed['artist']} - {parsed['song']} (ID: {video_id})")
+        facts = generate_facts_with_grok(parsed['artist'], parsed['song'], parsed['full_title'], video_id)
         
         # Create facts object
         facts_data = {
@@ -216,7 +310,8 @@ if __name__ == '__main__':
     print("Pop Up Video Facts Generator - Backend Server")
     print("=" * 60)
     print(f"Facts directory: {FACTS_DIR}")
-    print(f"Grok API Key set: {'Yes' if GROK_API_KEY else 'No (using fallback)'}")
+    print(f"xAI SDK client: {'✅ Initialized' if xai_client else '❌ Not available (using fallback)'}")
+    print(f"Model: {GROK_MODEL}")
     print("=" * 60)
     print("\nStarting server on http://localhost:5000")
     print("Endpoints:")
