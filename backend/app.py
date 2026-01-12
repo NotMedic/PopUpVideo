@@ -320,15 +320,17 @@ Generate fun, surprising trivia facts about:
 - Specific lyrics and their meanings (if transcript provided)
 
 IMPORTANT: If lyrics/transcript is provided above:
-- Match facts to relevant timestamps where specific lyrics are sung
+- Match facts to relevant timestamps where specific lyrics are sung. THis does not have to be on a 15 second boundary or anything.
 - Reference actual lyrics when discussing song meaning or wordplay
+- Use real references from sites like genius.com, songfacts.com, or similar to provide accurate lyric interpretations
 - Time facts to appear during meaningful or interesting lyrical moments
 - Feel free to include facts about other people mentioned in the lyrics at the appropriate time stamps where they're mentioned in the transcript. 
+- Call out double entendres, puns, or clever wordplay in the lyrics, but not for every fact.
 
 Facts should be:
 - Short (1-2 sentences max, under 200 characters)
 - Entertaining and surprising
-- Factually accurate (DO NOT make up information). Be prepared to cite your sources.
+- Factually accurate (DO NOT make up information). cite your sources.
 - In the style of VH1's Pop Up Video
 
 {timing_instruction}
@@ -349,40 +351,21 @@ Return ONLY valid JSON matching this structure:
 def _call_grok_with_retry(prompt):
 
     """
-    Helper function to call Grok with retry logic.
+    Helper function to call Grok with retry logic using Structured Outputs.
     """
     max_retries = 3
     
     for attempt in range(max_retries):
         try:
-            print(f"🌐 Generating facts using xAI SDK (attempt {attempt + 1}/{max_retries})...")
+            print(f"🌐 Generating facts using xAI SDK with Structured Outputs (attempt {attempt + 1}/{max_retries})...")
             
-            # Use xAI SDK to generate facts
+            # Use xAI SDK with Structured Outputs - guarantees valid JSON
             chat = xai_client.chat.create(model=GROK_MODEL)
-            chat.append(system("You are a Pop Up Video fact generator. Always respond with valid JSON matching the exact structure requested."))
+            chat.append(system("You are a Pop Up Video fact generator. Generate interesting, accurate trivia facts."))
             chat.append(user(prompt))
             
-            # Get the response
-            response = chat.sample()
-            content = response.content
-            
-            print(f"✅ Received response from Grok ({len(content)} chars)")
-            
-            # Clean up markdown code blocks if present
-            if '```json' in content:
-                content = content.split('```json')[1].split('```')[0].strip()
-            elif '```' in content:
-                content = content.split('```')[1].split('```')[0].strip()
-            
-            # Additional cleanup for common JSON issues
-            content = content.strip()
-            
-            # Debug: print first 500 chars of content if there's an issue
-            if attempt > 0:
-                print(f"[DEBUG] Content preview: {content[:500]}...")
-            
-            # Parse and validate with Pydantic
-            facts_list = FactsList.model_validate_json(content)
+            # Use chat.parse() with Pydantic model - returns validated object directly
+            response, facts_list = chat.parse(FactsList)
             
             print(f"✅ Generated {len(facts_list.facts)} facts successfully")
             
@@ -392,10 +375,6 @@ def _call_grok_with_retry(prompt):
             
         except Exception as attempt_error:
             print(f"⚠️  Attempt {attempt + 1} failed: {attempt_error}")
-            
-            # On last attempt or JSON validation error, print the content for debugging
-            if attempt == max_retries - 1 or "validation error" in str(attempt_error):
-                print(f"[DEBUG] Full content that failed:\n{content[:1000]}")
             
             # If this was the last attempt, raise the error
             if attempt == max_retries - 1:
