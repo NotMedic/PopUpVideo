@@ -435,8 +435,20 @@ def generate_facts():
         if not video_id or not title:
             return jsonify({'error': 'Missing video_id or title'}), 400
         
-        # Backend now fetches transcript automatically
         print(f"📹 Processing video: {video_id} - {title}")
+        
+        # Check if facts already exist (do this BEFORE fetching transcript)
+        facts_file = os.path.join(FACTS_DIR, f'{video_id}.json')
+        if os.path.exists(facts_file):
+            print(f"✅ Using cached facts from: {facts_file}")
+            with open(facts_file, 'r', encoding='utf-8') as f:
+                existing_facts = json.load(f)
+            return jsonify({
+                'source': 'cache',
+                'data': existing_facts
+            })
+        
+        # Only fetch transcript if we need to generate new facts
         transcript = fetch_youtube_transcript(video_id)
         
         # Log transcript availability
@@ -444,16 +456,6 @@ def generate_facts():
             print(f"📝 Transcript available: {len(transcript)} entries")
         else:
             print("📝 No transcript available")
-        
-        # Check if facts already exist
-        facts_file = os.path.join(FACTS_DIR, f'{video_id}.json')
-        if os.path.exists(facts_file):
-            with open(facts_file, 'r', encoding='utf-8') as f:
-                existing_facts = json.load(f)
-            return jsonify({
-                'source': 'cache',
-                'data': existing_facts
-            })
         
         # Check if this looks like a music video
         is_music, reason = is_likely_music_video(title)
