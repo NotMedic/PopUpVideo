@@ -121,6 +121,17 @@
             }
         }
         
+        // Get video description
+        let videoDescription = '';
+        const descElement = document.querySelector('ytd-text-inline-expander#description-inline-expander yt-attributed-string') ||
+                            document.querySelector('#description yt-formatted-string') ||
+                            document.querySelector('ytd-video-secondary-info-renderer #description');
+        
+        if (descElement && descElement.textContent) {
+            videoDescription = descElement.textContent.trim();
+            console.log('[PopUpFacts] Video description extracted:', videoDescription.substring(0, 100) + '...');
+        }
+        
         // Store the title for this video
         currentVideoTitle = videoTitle;
         
@@ -143,25 +154,27 @@
             data: JSON.stringify({
                 video_id: currentVideoId,
                 title: videoTitle,
-                duration: videoDuration
+                duration: videoDuration,
+                description: videoDescription
             }),
             onload: function(response) {
                 if (response.status === 200) {
                     try {
                         const result = JSON.parse(response.responseText);
                         
-                        // Check if video was skipped (not a music video)
+                        // No longer skip non-music videos - we now support all content!
                         if (result.source === 'skipped') {
-                            console.log('%c[PopUpFacts] Video skipped - not a music video', 'color: orange; font-weight: bold;');
+                            console.log('%c[PopUpFacts] Video skipped', 'color: orange; font-weight: bold;');
                             console.log('[PopUpFacts] Reason:', result.reason);
-                            factsLoaded = true; // Mark as loaded to prevent retries
-                            facts = []; // Empty facts array
+                            factsLoaded = true;
+                            facts = [];
                             return;
                         }
                         
                         facts = result.data.facts;
                         factsLoaded = true;
-                        console.log('%c[PopUpFacts] Facts generated successfully!', 'color: lime; font-weight: bold;', facts.length, 'facts');
+                        const contentType = result.data.contentType || 'unknown';
+                        console.log('%c[PopUpFacts] Facts generated successfully!', 'color: lime; font-weight: bold;', facts.length, 'facts', `(${contentType} content)`);
                         console.log('[PopUpFacts] Facts saved locally. Push to GitHub to share!');
                     } catch (e) {
                         console.error('[PopUpFacts] Error parsing API response:', e);
@@ -184,7 +197,6 @@
         const popup = document.createElement('div');
         popup.textContent = message;
         popup.style.position = 'fixed';
-        popup.style.top = '20px';
         popup.style.left = '50%';
         popup.style.transform = 'translateX(-50%)';
         popup.style.background = 'rgba(255, 50, 50, 0.95)';
