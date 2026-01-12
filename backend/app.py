@@ -8,6 +8,8 @@ from xai_sdk import Client
 from xai_sdk.chat import system, user
 from pydantic import BaseModel, Field
 from typing import List
+from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -28,7 +30,7 @@ class Fact(BaseModel):
 
 class FactsList(BaseModel):
     """Collection of Pop Up Video facts"""
-    facts: List[Fact] = Field(min_length=15, max_length=25, description="List of 15-25 facts")
+    facts: List[Fact] = Field(min_length=1, max_length=50, description="List of 1-50 facts")
 
 
 # Initialize xAI SDK client
@@ -41,6 +43,64 @@ try:
         print("⚠️ No GROK_API_KEY or XAI_API_KEY found - using fallback mode")
 except Exception as e:
     print(f"⚠️ Failed to initialize xAI client: {e}")
+
+
+def fetch_youtube_transcript(video_id):
+    """
+    Fetch transcript/captions from YouTube using youtube-transcript-api.
+    Returns list of dicts with 'start', 'duration', and 'text' keys.
+    Returns None if no transcript is available.
+    """
+    try:
+        print(f"📝 Fetching transcript for video: {video_id}")
+        
+        # Create API instance
+        ytt_api = YouTubeTranscriptApi()
+        
+        # Get list of available transcripts
+        transcript_list = ytt_api.list(video_id)
+        
+        # Try manual (human-made) English transcript first
+        try:
+            transcript = transcript_list.find_manually_created_transcript(['en'])
+            print(f"✅ Found manually created English transcript")
+        except:
+            # Fall back to auto-generated English
+            try:
+                transcript = transcript_list.find_generated_transcript(['en'])
+                print(f"✅ Found auto-generated English transcript")
+            except:
+                # Try any English transcript
+                transcript = transcript_list.find_transcript(['en'])
+                print(f"✅ Found English transcript")
+        
+        # Fetch the actual transcript data
+        fetched_transcript = transcript.fetch()
+        
+        # Convert to raw data (list of dicts)
+        raw_data = fetched_transcript.to_raw_data()
+        
+        # Format the transcript
+        formatted_transcript = []
+        for entry in raw_data:
+            formatted_transcript.append({
+                'start': int(entry['start']),  # Round to integer seconds
+                'duration': entry['duration'],
+                'text': entry['text']
+            })
+        
+        print(f"✅ Transcript fetched: {len(formatted_transcript)} entries")
+        return formatted_transcript
+        
+    except TranscriptsDisabled:
+        print(f"⚠️  Transcripts are disabled for video: {video_id}")
+        return None
+    except NoTranscriptFound:
+        print(f"⚠️  No English transcript found for video: {video_id}")
+        return None
+    except Exception as e:
+        print(f"⚠️  Error fetching transcript: {e}")
+        return None
 
 
 def is_likely_music_video(title):
@@ -136,9 +196,86 @@ def parse_video_title(title):
     }
 
 
-def generate_facts_with_grok(artist, song, title, video_id, duration=None):
+def generate_general_facts_with_grok(title, video_id, duration=None, description=None, transcript=None):
     """
-    Call Grok API using xAI SDK with Pydantic validation.
+    Generate Pop Up Video style facts for any video type (non-music).
+    """
+    if not xai_client:
+        return [
+            {"time": 10, "text": f"Watching: {title}"},
+            {"time": 30, "text": "Pop Up Video facts coming soon!"},
+            {"time": 60, "text": "Set your GROK_API_KEY environment variable to generate real facts."}
+        ]
+    
+    # Calculate fact timing based on video duration
+    if duration and duration > 0:
+        end_time = int(duration) - 10
+        num_facts = max(10, min(25, int(duration / 15)))
+        timing_instruction = f"Distribute timing evenly from 10 seconds to {end_time} seconds. Generate approximately {num_facts} facts."
+    else:
+        timing_instruction = "Distribute timing evenly from 10 seconds to 280 seconds. Generate 10-20 facts."
+    
+    description_context = f"\nVideo Description: {description[:500]}..." if description and len(description) > 20 else ""
+    
+    # Format transcript for prompt (if available)
+    transcript_context = ""
+    if transcript and len(transcript) > 0:
+        # Summarize transcript to keep prompt size manageable
+        transcript_lines = []
+        for i, entry in enumerate(transcript):
+            if i % 3 == 0 or i < 10 or i > len(transcript) - 10:  # Sample: first 10, last 10, and every 3rd
+                transcript_lines.append(f"[{entry['start']}s] {entry['text']}")
+            if len(transcript_lines) >= 50:  # Limit to 50 entries
+                break
+        transcript_context = f"\n\nTranscript/Captions (sampled):\n" + "\n".join(transcript_lines[:50])
+    
+    prompt = f"""Generate interesting Pop Up Video style facts for this YouTube video:
+
+Title: "{title}"
+YouTube Video ID: {video_id}
+Video Duration: {int(duration) if duration else 'unknown'} seconds{description_context}{transcript_context}
+
+Analyze the title, description, and transcript to identify:
+- Main subjects (people, products, places, events)
+- Key topics or themes discussed
+- Any recognizable entities
+- What's being talked about at different timestamps
+
+Generate fun, surprising trivia facts about:
+- People mentioned or featured (actors, creators, personalities)
+- Products or brands mentioned
+- Historical context or events referenced
+- Behind-the-scenes information
+- Cultural impact or significance
+- Production details if applicable
+- Any interesting connections or trivia
+- Content discussed at specific timestamps
+
+Facts should be:
+- Short (1-2 sentences max, under 200 characters)
+- Entertaining and surprising
+- Factually accurate (DO NOT make up information)
+- In the style of VH1's Pop Up Video
+- Relevant to what's mentioned in the title/description
+
+{timing_instruction}
+
+Return ONLY valid JSON matching this structure:
+{{
+  "facts": [
+    {{"time": 10, "text": "First fact..."}},
+    {{"time": 25, "text": "Second fact..."}},
+    ...
+  ]
+}}"""
+    
+    facts = _call_grok_with_retry(prompt)
+    return {'facts': facts, 'prompt': prompt}
+
+
+def generate_facts_with_grok(artist, song, title, video_id, duration=None, description=None, transcript=None):
+    """
+    Call Grok API using xAI SDK with Pydantic validation for music videos.
     """
     if not xai_client:
         # Fallback for testing without API key
@@ -156,11 +293,22 @@ def generate_facts_with_grok(artist, song, title, video_id, duration=None):
     else:
         timing_instruction = "Distribute timing evenly from 10 seconds to 280 seconds. Generate 15-20 facts."
     
+    description_context = f"\nVideo Description: {description[:500]}..." if description and len(description) > 20 else ""
+    
+    # Format transcript/lyrics for prompt (if available)
+    transcript_context = ""
+    if transcript and len(transcript) > 0:
+        # For music videos, include full lyrics with timestamps
+        lyrics_lines = []
+        for entry in transcript:
+            lyrics_lines.append(f"[{entry['start']}s] {entry['text']}")
+        transcript_context = f"\n\nLyrics with Timestamps:\n" + "\n".join(lyrics_lines)
+    
     prompt = f"""Generate interesting Pop Up Video style facts for this music video:
 
 "{title}" by {artist}
 YouTube Video ID: {video_id}
-Video Duration: {int(duration) if duration else 'unknown'} seconds
+Video Duration: {int(duration) if duration else 'unknown'} seconds{description_context}{transcript_context}
 
 Generate fun, surprising trivia facts about:
 - The song's creation and recording
@@ -169,11 +317,18 @@ Generate fun, surprising trivia facts about:
 - The song's chart performance and cultural impact
 - The era when this was released
 - Any interesting backstory or context
+- Specific lyrics and their meanings (if transcript provided)
+
+IMPORTANT: If lyrics/transcript is provided above:
+- Match facts to relevant timestamps where specific lyrics are sung
+- Reference actual lyrics when discussing song meaning or wordplay
+- Time facts to appear during meaningful or interesting lyrical moments
+- Feel free to include facts about other people mentioned in the lyrics at the appropriate time stamps where they're mentioned in the transcript. 
 
 Facts should be:
 - Short (1-2 sentences max, under 200 characters)
 - Entertaining and surprising
-- Factually accurate (do not make up information)
+- Factually accurate (DO NOT make up information). Be prepared to cite your sources.
 - In the style of VH1's Pop Up Video
 
 {timing_instruction}
@@ -186,43 +341,76 @@ Return ONLY valid JSON matching this structure:
     ...
   ]
 }}"""
+    
+    facts = _call_grok_with_retry(prompt)
+    return {'facts': facts, 'prompt': prompt}
 
-    try:
-        print(f"🌐 Generating facts using xAI SDK...")
-        
-        # Use xAI SDK to generate facts
-        chat = xai_client.chat.create(model=GROK_MODEL)
-        chat.append(system("You are a Pop Up Video fact generator. Always respond with valid JSON matching the exact structure requested."))
-        chat.append(user(prompt))
-        
-        # Get the response
-        response = chat.sample()
-        content = response.content
-        
-        print(f"✅ Received response from Grok ({len(content)} chars)")
-        
-        # Clean up markdown code blocks if present
-        if '```json' in content:
-            content = content.split('```json')[1].split('```')[0].strip()
-        elif '```' in content:
-            content = content.split('```')[1].split('```')[0].strip()
-        
-        # Parse and validate with Pydantic
-        facts_list = FactsList.model_validate_json(content)
-        
-        print(f"✅ Generated {len(facts_list.facts)} facts successfully")
-        
-        # Convert Pydantic objects to dicts
-        facts = [{"time": fact.time, "text": fact.text} for fact in facts_list.facts]
-        return facts
-        
-    except Exception as e:
-        print(f"❌ Error calling Grok API: {e}")
-        # Fallback facts
-        return [
-            {"time": 10, "text": f"Error generating facts: {str(e)}"},
-            {"time": 30, "text": f"Playing: {artist} - {song}"}
-        ]
+
+def _call_grok_with_retry(prompt):
+
+    """
+    Helper function to call Grok with retry logic.
+    """
+    max_retries = 3
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"🌐 Generating facts using xAI SDK (attempt {attempt + 1}/{max_retries})...")
+            
+            # Use xAI SDK to generate facts
+            chat = xai_client.chat.create(model=GROK_MODEL)
+            chat.append(system("You are a Pop Up Video fact generator. Always respond with valid JSON matching the exact structure requested."))
+            chat.append(user(prompt))
+            
+            # Get the response
+            response = chat.sample()
+            content = response.content
+            
+            print(f"✅ Received response from Grok ({len(content)} chars)")
+            
+            # Clean up markdown code blocks if present
+            if '```json' in content:
+                content = content.split('```json')[1].split('```')[0].strip()
+            elif '```' in content:
+                content = content.split('```')[1].split('```')[0].strip()
+            
+            # Additional cleanup for common JSON issues
+            content = content.strip()
+            
+            # Debug: print first 500 chars of content if there's an issue
+            if attempt > 0:
+                print(f"[DEBUG] Content preview: {content[:500]}...")
+            
+            # Parse and validate with Pydantic
+            facts_list = FactsList.model_validate_json(content)
+            
+            print(f"✅ Generated {len(facts_list.facts)} facts successfully")
+            
+            # Convert Pydantic objects to dicts
+            facts = [{"time": fact.time, "text": fact.text} for fact in facts_list.facts]
+            return facts
+            
+        except Exception as attempt_error:
+            print(f"⚠️  Attempt {attempt + 1} failed: {attempt_error}")
+            
+            # On last attempt or JSON validation error, print the content for debugging
+            if attempt == max_retries - 1 or "validation error" in str(attempt_error):
+                print(f"[DEBUG] Full content that failed:\n{content[:1000]}")
+            
+            # If this was the last attempt, raise the error
+            if attempt == max_retries - 1:
+                raise
+            
+            # Otherwise wait a bit and retry
+            print(f"🔄 Retrying in 2 seconds...")
+            import time
+            time.sleep(2)
+    
+    # Fallback if all retries failed
+    return [
+        {"time": 10, "text": "Error generating facts"},
+        {"time": 30, "text": "Unable to connect to fact generator"}
+    ]
 
 
 @app.route('/health', methods=['GET'])
@@ -242,9 +430,20 @@ def generate_facts():
         video_id = data.get('video_id', '')
         title = data.get('title', '')
         duration = data.get('duration', None)  # Optional duration in seconds
+        description = data.get('description', None)  # Optional video description
         
         if not video_id or not title:
             return jsonify({'error': 'Missing video_id or title'}), 400
+        
+        # Backend now fetches transcript automatically
+        print(f"📹 Processing video: {video_id} - {title}")
+        transcript = fetch_youtube_transcript(video_id)
+        
+        # Log transcript availability
+        if transcript and len(transcript) > 0:
+            print(f"📝 Transcript available: {len(transcript)} entries")
+        else:
+            print("📝 No transcript available")
         
         # Check if facts already exist
         facts_file = os.path.join(FACTS_DIR, f'{video_id}.json')
@@ -258,42 +457,53 @@ def generate_facts():
         
         # Check if this looks like a music video
         is_music, reason = is_likely_music_video(title)
-        print(f"🎵 Music video check: {is_music} - {reason}")
+        print(f"🎵 Content type check: {is_music} - {reason}")
         
-        if not is_music:
-            print(f"⏭️  Skipping non-music video: {title}")
-            return jsonify({
-                'source': 'skipped',
-                'reason': 'Not detected as a music video',
-                'detail': reason,
-                'data': None
-            }), 200  # Return 200 so TamperMonkey doesn't show error
-        
-        # Parse video title
-        parsed = parse_video_title(title)
-        
-        # Double-check parsing quality
-        if not parsed['is_music'] and parsed['artist'] == 'Unknown':
-            print(f"⚠️  Unclear music video format: {title}")
-            return jsonify({
-                'source': 'skipped',
-                'reason': 'Unable to parse artist/song from title',
-                'detail': 'Title format unclear',
-                'data': None
-            }), 200
-        
-        # Generate facts using Grok
         duration_info = f" ({int(duration)}s)" if duration else ""
-        print(f"Generating facts for: {parsed['artist']} - {parsed['song']} (ID: {video_id}){duration_info}")
-        facts = generate_facts_with_grok(parsed['artist'], parsed['song'], parsed['full_title'], video_id, duration)
+        
+        # Generate facts based on content type
+        if is_music:
+            # Parse video title for music content
+            parsed = parse_video_title(title)
+            
+            # Double-check parsing quality
+            if not parsed['is_music'] and parsed['artist'] == 'Unknown':
+                print(f"⚠️  Unclear music video format, treating as general content: {title}")
+                # Fallback to general facts
+                print(f"Generating general facts for: {title} (ID: {video_id}){duration_info}")
+                result = generate_general_facts_with_grok(title, video_id, duration, description, transcript)
+                facts = result['facts']
+                prompt_used = result['prompt']
+                content_type = 'general'
+                artist = 'Unknown'
+                song = title
+            else:
+                print(f"Generating music facts for: {parsed['artist']} - {parsed['song']} (ID: {video_id}){duration_info}")
+                result = generate_facts_with_grok(parsed['artist'], parsed['song'], parsed['full_title'], video_id, duration, description, transcript)
+                facts = result['facts']
+                prompt_used = result['prompt']
+                content_type = 'music'
+                artist = parsed['artist']
+                song = parsed['song']
+        else:
+            # Generate general facts for non-music content
+            print(f"🎬 Generating general facts for: {title} (ID: {video_id}){duration_info}")
+            result = generate_general_facts_with_grok(title, video_id, duration, description, transcript)
+            facts = result['facts']
+            prompt_used = result['prompt']
+            content_type = 'general'
+            artist = 'N/A'
+            song = title
         
         # Create facts object
         facts_data = {
             'videoId': video_id,
-            'title': parsed['full_title'],
-            'artist': parsed['artist'],
-            'song': parsed['song'],
+            'title': title,
+            'contentType': content_type,
+            'artist': artist,
+            'song': song,
             'generatedAt': datetime.utcnow().isoformat() + 'Z',
+            'prompt': prompt_used,
             'facts': facts
         }
         
