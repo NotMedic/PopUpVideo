@@ -318,9 +318,14 @@ Generate fun, surprising trivia facts about:
 - The era when this was released
 - Any interesting backstory or context
 - Specific lyrics and their meanings (if transcript provided)
+- Don't just quote lyrics and say it's a double entendre; make it an interesting fact, and you can use wordplay yourself.
+- For the Lyric references, provide a second layer of meaning or interpretation.
+- No Emojis.
 
 IMPORTANT: If lyrics/transcript is provided above:
 - Match facts to relevant timestamps where specific lyrics are sung. THis does not have to be on a 15 second boundary or anything.
+- Don't put the timestamp in the facts themselves, but ensure the timing corresponds to when the lyric is sung.
+- You also don't have to quote the lyrics in the fact, just allude to them. This saves space and allows more room for facts.
 - Reference actual lyrics when discussing song meaning or wordplay
 - Use real references from sites like genius.com, songfacts.com, or similar to provide accurate lyric interpretations
 - Time facts to appear during meaningful or interesting lyrical moments
@@ -332,6 +337,9 @@ Facts should be:
 - Entertaining and surprising
 - Factually accurate (DO NOT make up information). cite your sources.
 - In the style of VH1's Pop Up Video
+- Relevant to the song, artist, and lyrics, but also feel free to call out layers or other interesting trivia.
+- Any facts that are boring or dry should be avoided, or modified to be more entertaining.
+- "Punched Up" a notch or two for maximum entertainment value.
 
 {timing_instruction}
 
