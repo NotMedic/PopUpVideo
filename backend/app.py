@@ -10,6 +10,10 @@ from pydantic import BaseModel, Field
 from typing import List
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -240,6 +244,7 @@ Analyze the title, description, and transcript to identify:
 - Key topics or themes discussed
 - Any recognizable entities
 - What's being talked about at different timestamps
+- If a transcript or lyrics are not provided, retrieve them from another source and analyze accordingly.
 
 Generate fun, surprising trivia facts about:
 - People mentioned or featured (actors, creators, personalities)
